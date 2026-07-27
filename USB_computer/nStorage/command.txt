@@ -1,0 +1,1 @@
+log stream --level debug --predicate 'eventMessage contains "USB" or eventMessage contains "SCSI" or eventMessage contains "storage" or eventMessage contains "IOUSBMassStorage"' --style compact
