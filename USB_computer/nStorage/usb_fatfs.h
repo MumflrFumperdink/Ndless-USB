@@ -2035,7 +2035,17 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
         if (!nf) return;
         fclose(nf);
 
-        FatEntry *fe = &fatfs_entries[fatfs_entry_count];
+        FatEntry *fe = NULL;
+        for (uint32_t ei = 0; ei < fatfs_entry_count; ei++) {
+            if (strcmp(fatfs_entries[ei].path, full) == 0) {
+                fe = &fatfs_entries[ei];
+                break;
+            }
+        }
+        if (!fe) {
+            fe = &fatfs_entries[fatfs_entry_count];
+            fatfs_entry_count++;
+        }
         memset(fe, 0, sizeof(*fe));
         strncpy(fe->path, full, sizeof(fe->path) - 1);
         strncpy(fe->long_name, use_name, sizeof(fe->long_name) - 1);
@@ -2046,7 +2056,6 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
         fe->num_clusters = 1;
         fe->parent_index = parent_index;
         fe->subdir_slot = -1;
-        fatfs_entry_count++;
         fatfs_fix_persisted_size(parent_index, short_name11, 0);
         return;
     }
@@ -2126,7 +2135,17 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
         fatfs_print_controls_reminder();
     }
 
-    FatEntry *fe = &fatfs_entries[fatfs_entry_count];
+    FatEntry *fe = NULL;
+    for (uint32_t ei = 0; ei < fatfs_entry_count; ei++) {
+        if (strcmp(fatfs_entries[ei].path, full) == 0) {
+            fe = &fatfs_entries[ei];
+            break;
+        }
+    }
+    if (!fe) {
+        fe = &fatfs_entries[fatfs_entry_count];
+        fatfs_entry_count++;
+    }
     memset(fe, 0, sizeof(*fe));
     strncpy(fe->path, full, sizeof(fe->path) - 1);
     strncpy(fe->long_name, use_name, sizeof(fe->long_name) - 1);
@@ -2137,7 +2156,6 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
     fe->num_clusters = 1;
     fe->parent_index = parent_index;
     fe->subdir_slot = -1;
-    fatfs_entry_count++;
     fatfs_fix_persisted_size(parent_index, short_name11, fe->size);
 
     fatfs_log("created: \"%s\" (short=%.11s) cluster=%u parent=%d\n",
