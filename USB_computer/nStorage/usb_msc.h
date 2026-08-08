@@ -438,13 +438,17 @@ static int msc_scsi_execute(const uint8_t *cdb, uint8_t lun,
     uint8_t *xfer_buf = xfer_buf_ptr;
 
     // A background move is still copying file data -- report "not
-    // ready" for commands that would touch that data, so a
-    // well-behaved host retries automatically instead of racing ahead
-    // of files that haven't finished copying to their new location
-    // yet. Metadata-only commands (INQUIRY, REQUEST SENSE, etc.) are
-    // deliberately left alone so the host doesn't lose track of the
-    // device's basic identity while this is happening.
-    if (fatfs_bg_copy_active && (opcode == 0x00 || opcode == 0x28 || opcode == 0x2A)) {
+    // ready" specifically for WRITE(10), so a well-behaved host
+    // retries automatically instead of a new write racing the
+    // ongoing copy. Deliberately NOT applied to TEST_UNIT_READY or
+    // READ(10): rejecting reads too (e.g. Finder browsing into a
+    // folder) has a much shorter host-side patience budget than a
+    // copy does, and was the likely cause of a hang-then-forced-eject
+    // rather than the graceful retry this was meant to produce. A
+    // specific file that hasn't finished copying to its new location
+    // yet may simply fail to open -- a much milder failure than
+    // rejecting the read outright.
+    if (fatfs_bg_copy_active && opcode == 0x2A) {
         msc_set_sense(0x02, 0x04, 0x01); // NOT READY / LOGICAL UNIT NOT READY, IN PROGRESS OF BECOMING READY
         *out_residue = data_len;
         return 0;

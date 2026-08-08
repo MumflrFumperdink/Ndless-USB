@@ -326,6 +326,10 @@ static void fatfs_log_reset(void) {
     FILE *lg = fopen("/documents/usb_create_log.txt.tns", "wb");
     if (lg) fclose(lg);
 }
+#else
+static inline void fatfs_log(const char *fmt, ...) { (void)fmt; }
+static inline void fatfs_log_reset(void) {}
+#endif
 
 // Logs every filesystem-mutating operation before it executes, and
 // always allows it -- no blocking, no prompt. A blocking Y/N version
@@ -333,16 +337,15 @@ static void fatfs_log_reset(void) {
 // (directory moves failing outright) since it paused mid-USB-
 // transaction waiting for a keypress, and the host has its own ~5
 // second timeout for how long it'll wait for a command to complete.
-// This keeps the visibility without the risk.
-static int fatfs_confirm(const char *action) {
+// This keeps the visibility without the risk. Defined once, outside
+// the DEBUG_FS conditional above, so the on-screen announcement
+// (display_msg) always works regardless of build type -- only the
+// file-log side (fatfs_log itself) is debug-only.
+static int fatfs_confirm(const char *action, const char *display_msg = NULL) {
     fatfs_log("op: \"%s\"\n", action);
+    if (display_msg) screen_console << display_msg << nio::endl;
     return 1;
 }
-#else
-static inline void fatfs_log(const char *fmt, ...) { (void)fmt; }
-static inline void fatfs_log_reset(void) {}
-static inline int fatfs_confirm(const char *action) { (void)action; return 1; }
-#endif
 
 /* ==================================================================
  * Directory tree: recursive scan (startup) + live write tracking
@@ -835,6 +838,7 @@ static void fatfs_fix_persisted_size(int32_t parent_index, const char short_name
 
 #define FATFS_PROGRESS_REPORT_THRESHOLD (100u * 1024u) // only start showing progress once a file/folder is this large
 #define FATFS_PROGRESS_REPORT_INTERVAL  (250u * 1024u) // then update every this many additional bytes (incoming USB transfers only)
+#define FATFS_RECEIVING_ANNOUNCE_THRESHOLD (8u * 1024u) // announce "Receiving a file..." this early -- small enough to fire near the true start, large enough that tiny hidden sidecar files (which rarely exceed one small cluster) usually never trigger it at all
 
 // Shared state for a real file/folder move currently in progress --
 // unlike incoming USB transfers, the source size is already known
@@ -991,7 +995,7 @@ static void fatfs_bg_copy_step(void) {
         return; // opened this iteration -- copy its first chunk next time, keeping each step small
     }
 
-    uint8_t buf[2048];
+    uint8_t buf[16384];
     size_t n = fread(buf, 1, sizeof(buf), fatfs_bg_copy_src);
     if (n > 0) {
         fwrite(buf, 1, n, fatfs_bg_copy_dst);
@@ -1240,6 +1244,7 @@ typedef struct {
     uint32_t ram_cap;  // capacity of ram_buf once allocated (0 if never allocated)
     uint8_t  spilled;  // 1 once this slot's data has moved to stage_path on disk (either because it outgrew ram_cap, or RAM wasn't available) -- all further writes for this slot go straight to disk from that point on
     uint32_t last_reported_size; // last size (bytes) at which an on-screen progress update was shown for this slot -- avoids reprinting on every single sector
+    uint8_t  announced; // whether the generic "Receiving a file..." start announcement has already been shown for this slot
 } FatPending;
 
 static FatPending fatfs_pending[FATFS_MAX_PENDING];
@@ -1260,6 +1265,13 @@ static uint32_t fatfs_pending_ram_total = 0; // currently allocated across all s
 // written), so this shows a running received-byte count rather than a
 // percentage -- an honest reflection of what we actually know at any
 // given point during the transfer.
+static void fatfs_pending_announce_start(uint32_t slot) {
+    if (fatfs_pending[slot].announced) return;
+    if (fatfs_pending[slot].size < FATFS_RECEIVING_ANNOUNCE_THRESHOLD) return;
+    fatfs_pending[slot].announced = 1;
+    screen_console << "Receiving a file..." << nio::endl;
+}
+
 static void fatfs_pending_report_progress(uint32_t slot) {
     uint32_t size = fatfs_pending[slot].size;
     if (size < FATFS_PROGRESS_REPORT_THRESHOLD) return;
@@ -1401,6 +1413,7 @@ static uint32_t fatfs_alloc_pending(uint32_t cluster) {
     fatfs_pending[slot].ram_cap = 0;
     fatfs_pending[slot].spilled = 0;
     fatfs_pending[slot].last_reported_size = 0;
+    fatfs_pending[slot].announced = 0;
     // Path computed now but the file itself is only actually created
     // on disk if/when this slot spills -- most files fit entirely in
     // the RAM buffer and never need it at all.
@@ -1500,7 +1513,9 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
             FatEntry *fe = &fatfs_entries[idx];
             char action[220];
             snprintf(action, sizeof(action), "delete \"%s\" (is_dir=%d)", fe->path, (int)fe->is_dir);
-            if (fatfs_confirm(action)) {
+            char display[96];
+            snprintf(display, sizeof(display), "Deleting %s \"%s\"...", fe->is_dir ? "folder" : "file", fe->long_name);
+            if (fatfs_confirm(action, display)) {
                 // Deliberately NOT physically deleting here, for files
                 // OR directories -- see fatfs_flush_pending_deletes for
                 // the full reasoning (originally applied to directory
@@ -1664,7 +1679,9 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
             if (strcmp(old_path, new_path) != 0) {
                 char action[600];
                 snprintf(action, sizeof(action), "move dir \"%s\" -> \"%s\"", old_path, new_path);
-                if (fatfs_confirm(action)) {
+                char display[96];
+                snprintf(display, sizeof(display), "Moving folder \"%s\"...", move_name);
+                if (fatfs_confirm(action, display)) {
                     // If an earlier move's background copy hasn't
                     // finished yet, finish it now rather than
                     // overwriting its in-progress state (which would
@@ -1796,12 +1813,23 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
 
             char action[300];
             snprintf(action, sizeof(action), "create dir \"%s\"", full);
-            if (!fatfs_confirm(action)) return;
+            char display[96];
+            snprintf(display, sizeof(display), "Creating folder \"%s\"...", dir_name);
+            if (!fatfs_confirm(action, display)) return;
 
             mkdir(full, 0777); // untested return-value reliability here; proceed regardless and let downstream writes fail harmlessly if it didn't actually work
 
-            uint32_t new_idx = fatfs_entry_count;
-            FatEntry *fe = &fatfs_entries[new_idx];
+            FatEntry *fe = NULL;
+            for (uint32_t ei = 0; ei < fatfs_entry_count; ei++) {
+                if (strcmp(fatfs_entries[ei].path, full) == 0) {
+                    fe = &fatfs_entries[ei];
+                    break;
+                }
+            }
+            if (!fe) {
+                fe = &fatfs_entries[fatfs_entry_count];
+                fatfs_entry_count++;
+            }
             memset(fe, 0, sizeof(*fe));
             strncpy(fe->path, full, sizeof(fe->path) - 1);
             strncpy(fe->long_name, dir_name, sizeof(fe->long_name) - 1);
@@ -1811,7 +1839,6 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
             fe->start_cluster = start_cluster; // whatever cluster the host allocated for it
             fe->num_clusters = 1;
             fe->subdir_slot = (fatfs_subdir_count < FATFS_MAX_SUBDIRS) ? (int32_t)fatfs_subdir_count : -1;
-            fatfs_entry_count++;
 
             if (fe->subdir_slot >= 0) {
                 fatfs_subdir_count++;
@@ -1891,11 +1918,28 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
         {
             char action[600];
             snprintf(action, sizeof(action), "rename \"%s\" -> \"%s\"", existing->path, full2);
-            if (!fatfs_confirm(action)) return; // declined -- tracking stays unchanged
+            char display[96];
+            snprintf(display, sizeof(display), "Moving file \"%s\"...", use_name2);
+            if (!fatfs_confirm(action, display)) return; // declined -- tracking stays unchanged
         }
 
         strncpy(fatfs_move_display_name, use_name2, sizeof(fatfs_move_display_name) - 1);
         fatfs_move_display_name[sizeof(fatfs_move_display_name) - 1] = '\0';
+
+        // If the destination path already has a different, separately-
+        // tracked file (this rename is overwriting it), mark that
+        // stale entry deleted -- otherwise it stays marked deleted
+        // forever without ever being reused, and the deferred-delete
+        // cleanup at eject would remove the just-renamed file too,
+        // since both entries point at the same real path.
+        for (uint32_t oi = 0; oi < fatfs_entry_count; oi++) {
+            if (oi == k) continue;
+            FatEntry *other = &fatfs_entries[oi];
+            if (other->deleted || other->is_dir) continue;
+            if (strcmp(other->path, full2) != 0) continue;
+            other->deleted = 1;
+        }
+
         if (!fatfs_copy_and_remove(existing->path, full2, 1)) {
             existing->deleted = 0; // file is untouched at its original location -- keep it visible there
             screen_console << "Can't move/rename \"" << existing->long_name << "\" -- file is in use" << nio::endl;
@@ -2028,7 +2072,9 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
         {
             char action[280];
             snprintf(action, sizeof(action), "create \"%s\" (empty)", full);
-            if (!fatfs_confirm(action)) return;
+            char display[96];
+            snprintf(display, sizeof(display), "Creating file \"%s\"...", use_name);
+            if (!fatfs_confirm(action, display)) return;
         }
 
         FILE *nf = fopen(full, "wb");
@@ -2084,7 +2130,9 @@ static void fatfs_handle_short_entry_write(int32_t parent_index, const uint8_t *
     {
         char action[300];
         snprintf(action, sizeof(action), "create \"%s\" (%u bytes)", full, (unsigned int)buffered_size);
-        if (!fatfs_confirm(action)) {
+        char display[96];
+        snprintf(display, sizeof(display), "Saving \"%s\"...", use_name);
+        if (!fatfs_confirm(action, display)) {
             if (ram_buf) {
                 fatfs_pending_ram_total -= fatfs_pending[pending_idx].ram_cap;
                 free(ram_buf);
@@ -2483,6 +2531,7 @@ static int fatfs_write_volume_sector(uint32_t lba, const uint8_t *in512) {
             memcpy(fatfs_pending[pidx].ram_buf + byte_offset, in512, FATFS_SECTOR_SIZE);
             uint32_t end = byte_offset + FATFS_SECTOR_SIZE;
             if (end > fatfs_pending[pidx].size) fatfs_pending[pidx].size = end;
+            fatfs_pending_announce_start((uint32_t)pidx);
             fatfs_pending_report_progress((uint32_t)pidx);
             return 1;
         }
@@ -2501,6 +2550,7 @@ static int fatfs_write_volume_sector(uint32_t lba, const uint8_t *in512) {
             fatfs_stage_cache_pos = (long)byte_offset + FATFS_SECTOR_SIZE;
             uint32_t end = byte_offset + FATFS_SECTOR_SIZE;
             if (end > fatfs_pending[pidx].size) fatfs_pending[pidx].size = end;
+            fatfs_pending_announce_start((uint32_t)pidx);
             fatfs_pending_report_progress((uint32_t)pidx);
         } else {
             screen_console << "Warning: couldn't stage data for a file being copied" << nio::endl;

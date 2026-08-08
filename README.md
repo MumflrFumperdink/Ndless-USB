@@ -6,6 +6,9 @@ These are projects meant to develop a system for USB Communication on TI Nspire 
 
 1. USB_computer - projects concerning calc-to-computer communication 
     1. USB_computer_test1_connecting - initial testing of the USB OTG controller
+    2. nCoreTemp - a simple computer connection program which tracks cpu usage and temperature
+    3. nStorage - an implementation of a USB mass storage device, which allows file transfer and management in a native computer file browser
+    4. nKbdMouse - an implementation of a keyboard and mouse, allowing control of a computer from the calculator
 
 ## Background
 

@@ -19,47 +19,50 @@ SRCS_S   = $(shell find . -type f -iname \*.S)
 
 # Separate object-file suffixes per variant so both builds can coexist
 # in the same source tree without overwriting each other's .o files.
-RELEASE_OBJS = $(patsubst %.c,%.release.o,$(SRCS_C)) \
-               $(patsubst %.cpp,%.release.o,$(SRCS_CPP)) \
-               $(patsubst %.S,%.release.o,$(SRCS_S))
-DEBUG_OBJS   = $(patsubst %.c,%.debug.o,$(SRCS_C)) \
-               $(patsubst %.cpp,%.debug.o,$(SRCS_CPP)) \
-               $(patsubst %.S,%.debug.o,$(SRCS_S))
+RELEASE_OBJS = $(patsubst %.c,$(DISTDIR)/%.release.o,$(SRCS_C)) \
+       $(patsubst %.cpp,$(DISTDIR)/%.release.o,$(SRCS_CPP)) \
+       $(patsubst %.S,$(DISTDIR)/%.release.o,$(SRCS_S))
+DEBUG_OBJS = $(patsubst %.c,$(DISTDIR)/%.debug.o,$(SRCS_C)) \
+       $(patsubst %.cpp,$(DISTDIR)/%.debug.o,$(SRCS_CPP)) \
+       $(patsubst %.S,$(DISTDIR)/%.debug.o,$(SRCS_S))
 
-DISTDIR = .
+DISTDIR = ./build
 vpath %.tns $(DISTDIR)
 vpath %.elf $(DISTDIR)
 
-all: nStorage.tns nStorage-debug.tns
+all: $(DISTDIR)/nStorage.tns $(DISTDIR)/nStorage-debug.tns
 
-%.release.o: %.c
+$(DISTDIR)/%.release.o: %.c
+	@mkdir -p $(dir $@)
 	$(GCC) $(RELEASE_GCCFLAGS) -c $< -o $@
-%.release.o: %.cpp
+$(DISTDIR)/%.release.o: %.cpp
+	@mkdir -p $(dir $@)
 	$(GXX) $(RELEASE_GCCFLAGS) -c $< -o $@
-%.release.o: %.S
+$(DISTDIR)/%.release.o: %.S
+	@mkdir -p $(dir $@)
 	$(AS) -c $< -o $@
 
-%.debug.o: %.c
+$(DISTDIR)/%.debug.o: %.c
 	$(GCC) $(DEBUG_GCCFLAGS) -c $< -o $@
-%.debug.o: %.cpp
+$(DISTDIR)/%.debug.o: %.cpp
 	$(GXX) $(DEBUG_GCCFLAGS) -c $< -o $@
-%.debug.o: %.S
+$(DISTDIR)/%.debug.o: %.S
 	$(AS) -c $< -o $@
 
-nStorage.elf: $(RELEASE_OBJS)
+$(DISTDIR)/nStorage.elf: $(RELEASE_OBJS)
 	mkdir -p $(DISTDIR)
 	$(LD) $^ -o $@ $(LDFLAGS)
 
-nStorage-debug.elf: $(DEBUG_OBJS)
+$(DISTDIR)/nStorage-debug.elf: $(DEBUG_OBJS)
 	mkdir -p $(DISTDIR)
 	$(LD) $^ -o $@ $(LDFLAGS)
 
-nStorage.tns: nStorage.elf
+$(DISTDIR)/nStorage.tns: $(DISTDIR)/nStorage.elf
 	$(GENZEHN) --input $< --output $@.zehn --name "nStorage"
 	make-prg $@.zehn $@
 	rm $@.zehn
 
-nStorage-debug.tns: nStorage-debug.elf
+$(DISTDIR)/nStorage-debug.tns: $(DISTDIR)/nStorage-debug.elf
 	$(GENZEHN) --input $< --output $@.zehn --name "nStorage-debug"
 	make-prg $@.zehn $@
 	rm $@.zehn
