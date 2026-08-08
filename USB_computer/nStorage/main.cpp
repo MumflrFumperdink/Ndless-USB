@@ -83,6 +83,11 @@ int main(int argc, char *argv[]) {
             // native USB recovery afterward.
             screen_console << "Switching root, reconnecting..." << nio::endl;
             fatfs_flush_pending_deletes();
+            if (fatfs_any_mutation_happened) {
+                screen_console << "Refreshing OS document list..." << nio::endl;
+                refresh_osscr();
+                fatfs_any_mutation_happened = false;
+            }
             usb_device_shutdown();
             restore_native_usb_state();
             busy_wait(200000); // brief settle time so the host clearly sees the disconnect
@@ -93,6 +98,17 @@ int main(int argc, char *argv[]) {
         // Esc pressed -- eject and exit
         screen_console << "Ejecting..." << nio::endl;
         fatfs_flush_pending_deletes();
+        if (fatfs_any_mutation_happened) {
+            // refresh_osscr() is the documented Ndless call for
+            // exactly this ("must be called at the end of a program
+            // that creates or deletes files, to update the OS
+            // document browser") -- equivalent to the user manually
+            // going Home > Documents. Known to be slow on real
+            // hardware (scales with the user's total folder count),
+            // so only paid when something actually changed.
+            screen_console << "Refreshing OS document list..." << nio::endl;
+            refresh_osscr();
+        }
         usb_device_shutdown();
         restore_native_usb_state();
         close_log();

@@ -341,7 +341,15 @@ static inline void fatfs_log_reset(void) {}
 // the DEBUG_FS conditional above, so the on-screen announcement
 // (display_msg) always works regardless of build type -- only the
 // file-log side (fatfs_log itself) is debug-only.
+// Set whenever a real filesystem mutation happens (create/delete/
+// move/rename) -- lets us skip calling the OS's document-browser
+// refresh at exit entirely when nothing actually changed, since that
+// refresh is known to be slow on real hardware (scales with the
+// user's total folder count).
+static bool fatfs_any_mutation_happened = false;
+
 static int fatfs_confirm(const char *action, const char *display_msg = NULL) {
+    fatfs_any_mutation_happened = true;
     fatfs_log("op: \"%s\"\n", action);
     if (display_msg) screen_console << display_msg << nio::endl;
     return 1;
